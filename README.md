@@ -5,22 +5,25 @@
 
 # Gonzo - The Go based TUI for log analysis
 
+🆕 **NEW:** Press `d` from any Gonzo view to launch [Dstl8.Lite](#dstl8-lite) ↓ - a local browser-based dashboard with workspaces, log search, and severity heatmaps.
+
 <p align="center"><img src="docs/gonzo-mascot-smaller.png" width="250" alt="Gonzo Mascot"></p>
 
 [![Go Version](https://img.shields.io/badge/go-%3E%3D1.21-blue)](https://go.dev/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](./CONTRIBUTING.md)
 [![Docs](https://img.shields.io/badge/Docs-Getting%20Started-cyan.svg)](https://docs.controltheory.com/)
+[![skills.sh](https://img.shields.io/badge/skills.sh-listed-blue)](https://skills.sh/control-theory/gonzo)
 
 
-A powerful, real-time log analysis terminal UI inspired by k9s. Analyze log streams with beautiful charts, AI-powered insights, and advanced filtering - all from your terminal.
+A powerful, real-time log analysis terminal UI inspired by k9s. Analyze log streams with beautiful charts, AI-powered insights, and advanced filtering.
 
 Here are some references to get you started:
 
 - **[Documentation](https://docs.controltheory.com/)** - Complete docs, getting started, reference guide
 - **[Usage Guide](USAGE_GUIDE.md)** - Detailed usage instructions and examples
 - **[Contributing Guide](CONTRIBUTING.md)** - How to contribute to the project
-- **[Integration Examples](https://docs.controltheory.com/controltheory-documentation/gonzo-docs/integration-examples)** - Detailed itegrations and use cases
+- **[Integration Examples](https://docs.controltheory.com/controltheory-documentation/gonzo-docs/integration-examples)** - Works with [Vercel](https://docs.controltheory.com/controltheory-documentation/gonzo-docs/integration-examples/vercel-logs), [Supabase](https://docs.controltheory.com/controltheory-documentation/gonzo-docs/integration-examples/supabase-logs), [Railway](https://docs.controltheory.com/controltheory-documentation/gonzo-docs/integration-examples/railway-logs), [Cloudflare Workers](https://docs.controltheory.com/controltheory-documentation/gonzo-docs/integration-examples/cloudflare-logs), [Netlify](https://docs.controltheory.com/controltheory-documentation/gonzo-docs/integration-examples/netlify-logs), [Fly.io](https://docs.controltheory.com/controltheory-documentation/gonzo-docs/integration-examples/fly.io-logs), [Render](https://docs.controltheory.com/controltheory-documentation/gonzo-docs/integration-examples/render-logs), [AWS CloudWatch](https://docs.controltheory.com/controltheory-documentation/gonzo-docs/integration-examples/aws-cloudwatch-logs), and [more](https://docs.controltheory.com/controltheory-documentation/gonzo-docs/integration-examples).
 - **[Advanced Features](https://docs.controltheory.com/controltheory-documentation/gonzo-docs/advanced-features)** - AI, OTel, Custom Log Formats
 - **[Releases](https://github.com/control-theory/gonzo/releases)** - Download the latest version
 
@@ -39,6 +42,24 @@ Here are some references to get you started:
 ### Everyone loves a heatmap
 
 ![Gonzo Heatmap](docs/gonzo-heatmap.png)
+
+<a id="dstl8-lite"></a>
+
+### Press `d` for Dstl8.Lite
+
+Hit `d` from any Gonzo view to launch Dstl8.Lite - a local GUI that streams the same logs Gonzo is analyzing into a richer, browser-based dashboard with workspaces, pattern detection, severity heatmaps, and live log search. All running locally and powered by Gonzo under the hood.
+
+<p align="center">
+  <img src="docs/dstl8-lite-live-logs.gif" alt="Dstl8.Lite Live Logs">
+</p>
+
+#### Log viewer with severity filtering and live search
+
+![Dstl8.Lite Logs](docs/dstl8-lite-logs.png)
+
+#### Severity heatmap across pods
+
+![Dstl8.Lite Heatmap](docs/dstl8-lite-heatmap-by-pod.png)
 
 ## ✨ Features
 
@@ -64,6 +85,17 @@ Here are some references to get you started:
 - **Log Counts analysis** - Detailed modal with heatmap visualization, pattern analysis by severity, and service distribution
 - **AI analysis** - Get intelligent insights about log patterns and anomalies with configurable models
 
+### 🌐 Web Dashboard (Dstl8 Lite)
+
+- **Embedded React UI** - Full web dashboard served directly from the Gonzo binary (no external dependencies)
+- **Real-time updates** - WebSocket-powered live streaming with 1-second refresh
+- **Severity distribution** - Interactive time-series severity charts with stream-level filtering
+- **Sentiment heatmap** - Color-coded heatmap visualization grouped by pod, namespace, service, host, or deployment
+- **Pattern analysis** - Drain3-powered log pattern detection and classification
+- **Log viewer** - Searchable, auto-scrolling log viewer with click-to-expand details
+- **Source browser** - Explore log sources with dimension breakdowns
+- **Light/dark mode** - Automatic theme support
+
 ### 🔍 Advanced Filtering
 
 - **Regex support** - Filter logs with regular expressions
@@ -86,8 +118,8 @@ Here are some references to get you started:
 - **Pattern detection** - Automatically identify recurring issues
 - **Anomaly analysis** - Spot unusual patterns in your logs
 - **Root cause suggestions** - Get AI-powered debugging assistance
-- **Configurable models** - Choose from GPT-4, GPT-3.5, or any custom model
-- **Multiple providers** - Works with OpenAI, LM Studio, Ollama, or any OpenAI-compatible API
+- **Configurable models** - Choose from GPT-4, GPT-3.5, Claude Sonnet/Haiku/Opus, or any custom model
+- **Multiple providers** - Works with OpenAI, Claude Code, LM Studio, Ollama, or any OpenAI-compatible API
 - **Local AI support** - Run completely offline with local models
 
 ## 🚀 Quick Start
@@ -124,6 +156,17 @@ cd gonzo
 make build
 ```
 
+#### Using with Claude Code (plugin and skill)
+
+This repo includes a Claude Code plugin with a guided log-analysis skill. Inside Claude Code:
+
+```
+/plugin marketplace add control-theory/gonzo
+/plugin install gonzo@gonzo
+```
+
+Then ask Claude to "tail my logs", "watch my Vercel logs", or "analyze my Kubernetes logs". The skill detects your deployment platform, installs Gonzo if needed, configures AI analysis, and generates the right pipe command with platform-specific normalizers. See `skills/gonzo/` for the skill content.
+
 ## 📖 Usage
 
 ### Basic Usage
@@ -147,8 +190,8 @@ gonzo -f "/var/log/*.log" --follow
 cat application.log | gonzo
 
 # Stream logs directly from Kubernetes clusters
-gonzo --k8s-enabled=true --k8s-namespace=default
-gonzo --k8s-enabled=true --k8s-namespace=production --k8s-namespace=staging
+gonzo --k8s-enabled=true --k8s-namespaces=default
+gonzo --k8s-enabled=true --k8s-namespaces=production --k8s-namespaces=staging
 gonzo --k8s-enabled=true --k8s-selector="app=my-app"
 
 # Stream logs from kubectl (traditional way)
@@ -163,6 +206,8 @@ docker logs -f my-container 2>&1 | gonzo
 # With AI analysis (requires API key)
 export OPENAI_API_KEY=sk-your-key-here
 gonzo -f application.log --ai-model="gpt-4"
+
+# Press `d` once Gonzo is running to launch the Dstl8.Lite GUI in your browser
 ```
 
 ### Custom Log Formats
@@ -291,10 +336,40 @@ export OPENAI_API_KEY="ollama"
 export OPENAI_API_BASE="http://localhost:11434"
 gonzo -f logs.json --follow
 
+# Using Claude Code (uses sonnet by default)
+gonzo --ai-provider=claude-code -f logs.json
+
+# Claude Code with specific model
+gonzo --ai-provider=claude-code --ai-model=haiku -f /var/log/app.log --follow
+
 # Traditional stdin approach still works
 export OPENAI_API_KEY=sk-your-key-here
 cat logs.json | gonzo --ai-model="gpt-4"
 ```
+
+### Web Dashboard (Dstl8 Lite)
+
+Gonzo includes an embedded web dashboard that runs alongside the TUI. It starts automatically on port 5718.
+
+```bash
+# Gonzo starts the web dashboard automatically
+gonzo -f application.log --follow
+# Open http://localhost:5718 in your browser
+
+# Use a custom port
+gonzo -f application.log --web-port=3000
+
+# Disable the web dashboard
+gonzo -f application.log --web-disabled
+```
+
+The dashboard includes:
+- **Workspaces** - Overview of all active log streams with sparkline previews
+- **Stream Details** - Severity distribution, top attributes, pattern analysis, and live log viewer per stream
+- **Sentiment Heatmap** - Real-time heatmap grouped by pod, namespace, service, host, or deployment with auto-detection of available dimensions
+- **Sources** - Browse log sources with dimension breakdowns
+
+All data updates in real-time via WebSocket, matching what you see in the TUI.
 
 ### Keyboard Shortcuts
 
@@ -317,10 +392,12 @@ cat logs.json | gonzo --ai-model="gpt-4"
 | `Space`        | Pause/unpause entire dashboard            |
 | `/`            | Enter filter mode (regex supported)       |
 | `s`            | Search and highlight text in logs         |
+| `d`            | Launch Dstl8.Lite GUI in browser          |
 | `Ctrl+f`       | Open severity filter modal                |
 | `Ctrl+k`       | Open Kubernetes filter modal (k8s mode)   |
 | `f`            | Open fullscreen log viewer modal          |
-| `c`            | Toggle Namespace/Pod or Host/Service cols |
+| `c`            | Toggle columns (Host/Service ↔ Namespace/Pod in k8s mode) |
+| `C`            | Configure visible columns (column picker) |
 | `r`            | Reset all data (manual reset)             |
 | `u` / `U`      | Cycle update intervals (forward/backward) |
 | `i`            | AI analysis (in detail view)              |
@@ -364,6 +441,22 @@ The severity filter modal (`Ctrl+f`) provides fine-grained control over which lo
 - **Real-time count** - Header shows how many levels are currently active
 - **Persistent filtering** - Applied filters remain active until changed
 - **Quick shortcuts** - Press Enter on Select All/None to apply immediately
+
+#### Column Picker Modal
+
+The column picker modal (`C` key) lets you configure which columns are visible in the log viewer:
+
+| Key                | Action                              |
+| ------------------ | ----------------------------------- |
+| `↑`/`↓` or `k`/`j` | Navigate column options             |
+| `Space`            | Toggle selected column on/off       |
+| `Enter`            | Apply changes and close modal       |
+| `ESC`              | Discard changes and close modal     |
+
+**Features:**
+- **Default Columns** - Built-in columns like Timestamp, Severity, Host, Service, and Message
+- **Discovered Attributes** - Dynamically detected attribute keys from incoming log data
+- **Active counter** - Header shows `(N/M active)` indicating how many columns are currently enabled
 
 ### Log Counts Analysis Modal
 
@@ -420,17 +513,22 @@ Flags:
   -u, --update-interval duration   Dashboard update interval (default: 1s)
   -b, --log-buffer int             Maximum log entries to keep (default: 1000)
   -m, --memory-size int            Maximum frequency entries (default: 10000)
+  --ai-provider string             AI provider to use: 'openai' (default), 'claude-code'
   --ai-model string                AI model for analysis (auto-selects best available if not specified)
   -s, --skin string                Color scheme/skin to use (default, or name of a skin file)
   --stop-words strings             Additional stop words to filter out from analysis (adds to built-in list)
 
+Web Dashboard Flags:
+  --web-port int                   Port for the Dstl8 Lite web dashboard (default: 5718)
+  --web-disabled                   Disable the web dashboard
+
 Kubernetes Flags:
   --k8s-enabled=true               Enable Kubernetes log streaming mode
-  --k8s-namespace stringArray      Kubernetes namespace(s) to watch (can specify multiple, default: all)
+  --k8s-namespaces stringArray      Kubernetes namespace(s) to watch (can specify multiple, default: all)
   --k8s-selector string            Kubernetes label selector for filtering pods
   --k8s-tail int                   Number of previous log lines to retrieve (default: 10)
   --k8s-since int                  Only return logs newer than relative duration in seconds
-  --k8s-kubeconfig string          Path to kubeconfig file (default: $HOME/.kube/config)
+  --k8s-kubeconfig string          Path to kubeconfig file (default: $KUBECONFIG or $HOME/.kube/config)
   --k8s-context string             Kubernetes context to use
 
   -t, --test-mode                  Run without TTY for testing
@@ -471,7 +569,12 @@ stop-words:
 test-mode: false
 
 # AI configuration
+ai-provider: "openai"  # Options: "openai" (default), "claude-code"
 ai-model: "gpt-4"
+
+# Web dashboard (Dstl8 Lite)
+web-port: 5718       # Port for the web dashboard
+web-disabled: false   # Set to true to disable
 ```
 
 See [examples/config.yml](examples/config.yml) for a complete configuration example with detailed comments.
@@ -492,6 +595,45 @@ cat logs.json | gonzo
 # Or specify a particular model
 cat logs.json | gonzo --ai-model="gpt-4"
 ```
+
+#### Claude Code (Anthropic Claude)
+
+```bash
+# 1. Install Claude Code CLI
+# Download from https://claude.ai/download
+
+# 2. Authenticate (if not already done)
+claude auth login
+
+# 3. Run Gonzo with Claude Code (uses sonnet by default)
+gonzo --ai-provider=claude-code -f application.log
+
+# Specify a model
+gonzo --ai-provider=claude-code --ai-model=sonnet -f logs.json  # Default, balanced
+gonzo --ai-provider=claude-code --ai-model=haiku -f logs.json   # Faster, efficient
+gonzo --ai-provider=claude-code --ai-model=opus -f logs.json    # Most capable
+
+# Works with all input methods
+gonzo --ai-provider=claude-code --k8s-enabled
+cat logs.json | gonzo --ai-provider=claude-code
+tail -f /var/log/app.log | gonzo --ai-provider=claude-code --ai-model=haiku
+
+# Run Claude in a container (Podman/Docker)
+export GONZO_CLAUDE_PATH="podman exec -it claude-container claude"
+gonzo --ai-provider=claude-code -f logs.json
+
+export GONZO_CLAUDE_PATH="docker exec -it my-claude-container claude"
+gonzo --ai-provider=claude-code --ai-model=haiku -f /var/log/app.log --follow
+```
+
+**Available Models:**
+- `sonnet` (default) - Claude Sonnet, balanced performance and capability
+- `haiku` - Fastest and most efficient, best for high-volume logs
+- `opus` - Most capable, best for complex analysis
+
+**Notes:**
+- Claude Code CLI manages authentication independently. The `OPENAI_API_KEY` environment variable is not needed.
+- Use `GONZO_CLAUDE_PATH` to specify a custom path or command (useful for running Claude in containers).
 
 #### LM Studio (Local AI)
 
@@ -552,6 +694,10 @@ The model selection modal shows:
 
 **Note:** Model switching requires the AI service to be properly configured and running. The modal will only appear if models are available from your AI provider.
 
+**Provider-Specific Behavior:**
+- **OpenAI/Ollama/LM Studio**: Shows all models available from the API
+- **Claude Code**: Shows sonnet, haiku, and opus (managed by Claude CLI)
+
 #### Auto Model Selection
 
 When you don't specify the `--ai-model` flag, Gonzo automatically selects the best available model:
@@ -559,9 +705,10 @@ When you don't specify the `--ai-model` flag, Gonzo automatically selects the be
 **Selection Priority:**
 
 1. **OpenAI**: Prefers `gpt-4` → `gpt-3.5-turbo` → first available
-2. **Ollama**: Prefers `gpt-oss:20b` → `llama3` → `mistral` → `codellama` → first available
-3. **LM Studio**: Uses first available model from the server
-4. **Other providers**: Uses first available model
+2. **Claude Code**: Defaults to `sonnet` (haiku and opus also available)
+3. **Ollama**: Prefers `gpt-oss:20b` → `llama3` → `mistral` → `codellama` → first available
+4. **LM Studio**: Uses first available model from the server
+5. **Other providers**: Uses first available model
 
 **Benefits:**
 
@@ -594,18 +741,30 @@ When you don't specify the `--ai-model` flag, Gonzo automatically selects the be
 - ✅ Verify API key is valid and has credits
 - ✅ Check model availability (gpt-4 requires API access)
 
+**Claude Code Issues:**
+
+- ✅ Ensure Claude Code CLI is installed: `claude --version`
+- ✅ Authenticate with Claude: `claude auth login`
+- ✅ Test CLI access: `claude -p "test prompt"`
+- ✅ Available models: `sonnet` (default), `haiku`, `opus`
+- ✅ Use `--ai-provider=claude-code` flag when running Gonzo
+
 ### Environment Variables
 
 | Variable                | Description                                                          |
 | ----------------------- | -------------------------------------------------------------------- |
-| `OPENAI_API_KEY`        | API key for AI analysis (required for AI features)                   |
+| `OPENAI_API_KEY`        | API key for AI analysis (required for OpenAI-based AI features)                   |
 | `OPENAI_API_BASE`       | Custom API endpoint (default: <https://api.openai.com/v1>)             |
+| `GONZO_AI_PROVIDER`     | AI provider to use ('openai' or 'claude-code')                       |
+| `GONZO_CLAUDE_PATH`     | Custom path/command for Claude CLI (e.g., for container execution)   |
 | `GONZO_FILES`           | Comma-separated list of files/globs to read (equivalent to -f flags) |
 | `GONZO_FOLLOW`          | Enable follow mode (true/false)                                      |
 | `GONZO_UPDATE_INTERVAL` | Override update interval                                             |
 | `GONZO_LOG_BUFFER`      | Override log buffer size                                             |
 | `GONZO_MEMORY_SIZE`     | Override memory size                                                 |
 | `GONZO_AI_MODEL`        | Override default AI model                                            |
+| `GONZO_WEB_PORT`        | Override web dashboard port (default: 5718)                          |
+| `GONZO_WEB_DISABLED`    | Disable web dashboard (true/false)                                   |
 | `GONZO_TEST_MODE`       | Enable test mode                                                     |
 | `NO_COLOR`              | Disable colored output                                               |
 
@@ -677,16 +836,19 @@ Gonzo is built with:
 - **OpenTelemetry** - Native OTLP support
 - **Large amounts of** ☕️
 
-The architecture follows a clean separation:
+The architecture follows a clean separation with a shared analysis engine:
 
 ```
 cmd/gonzo/              # Main application entry
 internal/
-├── tui/                # Terminal UI implementation
-├── analyzer/           # Log analysis engine
+├── engine/            # Shared analysis engine (feeds TUI and web)
+├── tui/               # Terminal UI implementation
+├── web/               # Dstl8 Lite web dashboard (embedded React)
+├── analyzer/          # Log analysis engine
 ├── memory/            # Frequency tracking
 ├── otlplog/           # OTLP format handling
 └── ai/                # AI integration
+web/                    # React frontend source (Vite + TypeScript)
 ```
 
 ## 🧪 Development
@@ -699,8 +861,12 @@ internal/
 ### Building
 
 ```bash
-# Quick build
+# Quick build (includes web dashboard)
 make build
+
+# Build web dashboard only
+make web-deps    # Install npm dependencies
+make web-build   # Build React app
 
 # Run tests
 make test
@@ -796,13 +962,19 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - [AWS CloudWatch Logs Usage Guide](guides/CLOUDWATCH_USAGE_GUIDE.md) - Usage instructions for AWS CLI log tail and live tail with Gonzo
 - [Stern Usage Guide](guides/STERN_USAGE_GUIDE.md) - Usage and examples for using Stern with Gonzo
 - [Victoria Logs Integration](guides/VICTORIA_LOGS_USAGE.md) - Using Gonzo with Victoria Logs API
+- [Web Dashboard](guides/WEB_DASHBOARD_USAGE.md) - Dstl8 Lite web UI setup
 - [Contributing Guide](CONTRIBUTING.md) - How to contribute
 - [Changelog](CHANGELOG.md) - Version history
 
-## 💬 Slack Community
+## 🎥 Talks & Demos
 
-- [Invite/Join](https://join.slack.com/t/ctrltheorycommunity/shared_invite/zt-3dr6rke5w-GlcRaW2bvn4zcSaV8byZgA)
-- [Channel Link](https://ctrltheorycommunity.slack.com)
+* **[Gonzo Roadmap & Pro Tips Live Demo with Maintainers](https://www.controltheory.com/videos/gonzo-roadmap-and-pro-tips-live-demo-session/)** - Live session covering the roadmap, advanced features, and Q&A with the maintainers
+
+## 💬 Community
+
+- [Discord](https://discord.gg/nRBUFYByta)
+- [Slack Invite/Join](https://join.slack.com/t/ctrltheorycommunity/shared_invite/zt-3dr6rke5w-GlcRaW2bvn4zcSaV8byZgA)
+- [Slack Channel Link](https://ctrltheorycommunity.slack.com)
 
 ## 🐛 Reporting Issues
 

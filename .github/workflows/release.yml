@@ -27,6 +27,19 @@ jobs:
       - name: Set GO_VERSION environment variable
         run: echo "GO_VERSION=$(go version | cut -d' ' -f3)" >> $GITHUB_ENV
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build web dashboard
+        run: make web-build
+
+      - name: Mark web/dist as unchanged for GoReleaser
+        run: git update-index --assume-unchanged web/dist/index.html
+
       - name: Run tests
         run: make test
 

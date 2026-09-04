@@ -1,12 +1,15 @@
 package tui
 
 import (
+	"os/exec"
 	"regexp"
+	"runtime"
 	"sort"
 	"time"
 
 	"github.com/control-theory/gonzo/internal/ai"
 	"github.com/control-theory/gonzo/internal/memory"
+	"github.com/control-theory/gonzo/internal/releases"
 	versioncheck "github.com/control-theory/gonzo/internal/version"
 
 	"github.com/charmbracelet/bubbles/textarea"
@@ -45,6 +48,15 @@ type LogEntry struct {
 	Attributes    map[string]string
 }
 
+// ColumnConfig represents a configurable column in the log viewer
+type ColumnConfig struct {
+	Key       string // Attribute key (e.g., "host.name", "k8s.namespace", "timestamp", "severity", "message")
+	Label     string // Display label (e.g., "Host", "Namespace")
+	Width     int    // Display width in characters (0 means fill remaining space)
+	Enabled   bool   // Whether column is visible
+	IsDefault bool   // Is this a built-in default column (vs discovered from log attributes)
+}
+
 // HeatmapMinute represents severity counts for one minute in the heatmap
 type HeatmapMinute struct {
 	Timestamp time.Time
@@ -66,16 +78,16 @@ type ServiceCount struct {
 // DashboardModel represents the main TUI model
 type DashboardModel struct {
 	// Dashboard state
-	width              int
-	height             int
-	activeSection      Section
-	showModal          bool
-	modalContent       string
-	showHelp           bool
-	showPatternsModal  bool
-	showStatsModal     bool
-	showCountsModal    bool
-	showLogViewerModal    bool
+	width                   int
+	height                  int
+	activeSection           Section
+	showModal               bool
+	modalContent            string
+	showHelp                bool
+	showPatternsModal       bool
+	showStatsModal          bool
+	showCountsModal         bool
+	showLogViewerModal      bool
 	showSeverityFilterModal bool
 
 	// Data
@@ -112,26 +124,26 @@ type DashboardModel struct {
 	severityFilterOriginal map[string]bool // Original state when modal opened (for ESC cancellation)
 
 	// Kubernetes Filter (requires integration with k8s log source)
-	showK8sFilterModal     bool                // Whether to show K8s filter modal
-	k8sNamespaces          map[string]bool     // Available namespaces and their selection state
-	k8sPods                map[string]bool     // Available pods and their selection state
-	k8sFilterSelected      int                 // Selected index in K8s filter modal
-	k8sScrollOffset        int                 // Scroll offset for K8s filter modal
-	k8sFilterOriginal      map[string]bool     // Original namespace state (for ESC cancellation)
-	k8sPodsOriginal        map[string]bool     // Original pod state (for ESC cancellation)
-	k8sActiveView          string              // "namespaces" or "pods"
-	k8sFilterActive        bool                // Whether K8s filtering is currently active
-	k8sSource              K8sSourceInterface  // Reference to K8s source for listing namespaces/pods
+	showK8sFilterModal bool               // Whether to show K8s filter modal
+	k8sNamespaces      map[string]bool    // Available namespaces and their selection state
+	k8sPods            map[string]bool    // Available pods and their selection state
+	k8sFilterSelected  int                // Selected index in K8s filter modal
+	k8sScrollOffset    int                // Scroll offset for K8s filter modal
+	k8sFilterOriginal  map[string]bool    // Original namespace state (for ESC cancellation)
+	k8sPodsOriginal    map[string]bool    // Original pod state (for ESC cancellation)
+	k8sActiveView      string             // "namespaces" or "pods"
+	k8sFilterActive    bool               // Whether K8s filtering is currently active
+	k8sSource          K8sSourceInterface // Reference to K8s source for listing namespaces/pods
 
 	// Charts data for rendering
 	chartsInitialized bool
 
 	// Selection state
-	selectedIndex    map[Section]int
-	selectedLogIndex int  // For log section navigation
-	viewPaused       bool // Pause view updates when navigating logs
-	logAutoScroll    bool // Auto-scroll to latest logs in log viewer
-	instructionsScrollOffset int // Scroll position for instructions/filter status screen
+	selectedIndex            map[Section]int
+	selectedLogIndex         int  // For log section navigation
+	viewPaused               bool // Pause view updates when navigating logs
+	logAutoScroll            bool // Auto-scroll to latest logs in log viewer
+	instructionsScrollOffset int  // Scroll position for instructions/filter status screen
 
 	// Modal display options
 	attributeWrappingEnabled bool // Whether to wrap attribute values instead of truncating them
@@ -141,7 +153,7 @@ type DashboardModel struct {
 	currentIntervalIdx int
 
 	// AI Analysis
-	aiClient         *ai.OpenAIClient
+	aiClient         ai.Client
 	aiAnalyzing      bool
 	currentLogEntry  *LogEntry // Track current log entry being viewed for AI analysis
 	aiAnalysisResult string    // Store the AI analysis result for display
@@ -161,6 +173,10 @@ type DashboardModel struct {
 	// Modal section navigation
 	modalActiveSection string // "info" or "chat"
 
+	// Clipboard feedback (transient status message shown after a copy action)
+	copyFeedback       string
+	copyFeedbackExpiry time.Time
+
 	// Model selection modal
 	showModelSelectionModal bool
 	selectedModelIndex      int
@@ -176,6 +192,19 @@ type DashboardModel struct {
 
 	// Column display
 	showColumns bool // Toggle Host and Service columns in log view
+
+	// Column customization
+	showColumnConfigModal    bool            // Whether to show column config modal
+	columnConfigSelected     int             // Selected index in column config modal
+	columnConfigScrollOffset int             // Scroll offset for column config modal
+	columnConfigOriginal     []ColumnConfig  // Original state for ESC cancellation
+	activeColumns            []ColumnConfig  // Currently enabled columns in display order
+	availableColumns         []ColumnConfig  // All available columns (defaults + discovered)
+	discoveredAttributes     map[string]bool // Track all unique attribute keys seen across logs
+	columnMaxWidths          map[string]int  // Tracks the max observed width for each column (never shrinks)
+	columnWidthLimitEnabled  bool            // Whether the MaxColumnWidth cap is applied
+	logViewHorizontalOffset  int             // Horizontal scroll offset for log viewer
+	autoSwitchedToK8sMode    bool            // Track if we've already auto-switched to k8s columns
 
 	// Drain3 pattern extraction
 	drain3Manager       *Drain3Manager
@@ -203,6 +232,19 @@ type DashboardModel struct {
 
 	// Version checking
 	versionChecker *versioncheck.Checker // Version checker for update notifications
+
+	// Web dashboard
+	webPort int // Port for the Dstl8 Lite web dashboard (for browser open shortcut)
+
+	// What's New modal
+	showWhatsNewModal      bool
+	releasesFetcher        *releases.Fetcher
+	currentVersion         string
+	lastSeenVersion        string
+	whatsNewCheckDone      bool   // true after we've checked whether to auto-show
+	whatsNewRetries        int    // retry counter for waiting on background fetch
+	whatsNewRenderedCache  string // pre-rendered content (glamour is expensive)
+	whatsNewCacheWidth     int    // width the cache was rendered at
 }
 
 // UpdateMsg contains data updates for the dashboard
@@ -232,8 +274,8 @@ type AIAnalysisMsg struct {
 // ManualResetMsg represents a manual reset request triggered by user
 type ManualResetMsg struct{}
 
-// initializeDrain3BySeverity creates separate drain3 instances for each severity level
-func initializeDrain3BySeverity() map[string]*Drain3Manager {
+// InitializeDrain3BySeverity creates separate drain3 instances for each severity level
+func InitializeDrain3BySeverity() map[string]*Drain3Manager {
 	severities := []string{"FATAL", "ERROR", "WARN", "INFO", "DEBUG", "TRACE", "UNKNOWN"}
 	drain3Map := make(map[string]*Drain3Manager)
 
@@ -245,7 +287,7 @@ func initializeDrain3BySeverity() map[string]*Drain3Manager {
 }
 
 // NewDashboardModel creates a new dashboard model with stop words
-func NewDashboardModel(maxLogBuffer int, updateInterval time.Duration, aiModel string, stopWords map[string]bool, reverseScrollWheel bool, useLogTime bool) *DashboardModel {
+func NewDashboardModel(maxLogBuffer int, updateInterval time.Duration, aiProvider string, aiModel string, stopWords map[string]bool, reverseScrollWheel bool, useLogTime bool) *DashboardModel {
 	filterInput := textinput.New()
 	filterInput.Placeholder = "Filter logs by message or attributes (regex supported)..."
 	filterInput.CharLimit = 200
@@ -295,12 +337,11 @@ func NewDashboardModel(maxLogBuffer int, updateInterval time.Duration, aiModel s
 		allLogEntries:       make([]LogEntry, 0, maxLogBuffer),
 		countsHistory:       make([]SeverityCounts, 0),
 		heatmapData:         make([]HeatmapMinute, 0),
-		drain3BySeverity:    initializeDrain3BySeverity(),
+		drain3BySeverity:    InitializeDrain3BySeverity(),
 		servicesBySeverity:  make(map[string][]ServiceCount),
-		availableIntervals:  availableIntervals,
-		currentIntervalIdx:  currentIdx,
-		aiClient:            ai.NewOpenAIClient(aiModel), // Initialize AI client with configurable model
-		infoViewport:        viewport.New(80, 20),        // Will be resized later
+		availableIntervals: availableIntervals,
+		currentIntervalIdx: currentIdx,
+		infoViewport:       viewport.New(80, 20), // Will be resized later
 		chatViewport:        viewport.New(30, 20),        // Will be resized later
 		modalActiveSection:  "info",                      // Start with info section active
 		chatHistory:         make([]string, 0),
@@ -309,8 +350,16 @@ func NewDashboardModel(maxLogBuffer int, updateInterval time.Duration, aiModel s
 		drain3LastProcessed: 0,                  // Initialize drain3 tracking
 		logAutoScroll:       true,               // Start with auto-scroll enabled
 		showColumns:         true,               // Show Host/Service columns by default
-		instructionsScrollOffset: 0,             // Start at top of instructions
-		attributeWrappingEnabled: false,         // Default to truncating (not wrapping)
+		// Initialize column customization
+		discoveredAttributes:     make(map[string]bool),
+		columnMaxWidths:          make(map[string]int),
+		columnWidthLimitEnabled:  true, // Enable 100-char column width cap by default
+		activeColumns:            getDefaultActiveColumns(),
+		availableColumns:         getDefaultAvailableColumns(),
+		columnConfigSelected:     0,
+		logViewHorizontalOffset:  0,     // Start with no horizontal scroll
+		instructionsScrollOffset: 0,     // Start at top of instructions
+		attributeWrappingEnabled: false, // Default to truncating (not wrapping)
 		// Initialize statistics tracking
 		statsStartTime:      time.Now(),
 		statsTotalBytes:     0,
@@ -346,14 +395,29 @@ func NewDashboardModel(maxLogBuffer int, updateInterval time.Duration, aiModel s
 		severityFilterOriginal: make(map[string]bool), // Initialize empty map for modal state backup
 	}
 
-	// Initialize AI status based on client validation
-	if m.aiClient != nil {
-		m.aiConfigured, m.aiErrorMessage, m.aiServiceName, m.aiModelName = m.aiClient.GetValidationStatus()
+	// Initialize AI client via factory
+	aiClient, err := ai.NewClient(ai.ProviderType(aiProvider), aiModel)
+	if err != nil {
+		// Provider error (e.g., invalid provider or missing API key when explicitly requested)
+		m.aiClient = nil
+		m.aiConfigured = false
+		m.aiServiceName = "None"
+		m.aiModelName = ""
+		m.aiErrorMessage = err.Error()
+	} else if aiClient != nil {
+		m.aiClient = aiClient
+		status := aiClient.GetValidationStatus()
+		m.aiConfigured = status.Validated
+		m.aiErrorMessage = status.ErrorMessage
+		m.aiServiceName = status.ServiceName
+		m.aiModelName = status.ModelName
 		// Get available models list for model selection modal
 		if m.aiConfigured {
-			m.availableModelsList = m.aiClient.AvailableModels
+			m.availableModelsList = aiClient.CachedModels()
 		}
 	} else {
+		// nil client, nil error = AI disabled (no API key in auto mode)
+		m.aiClient = nil
 		m.aiConfigured = false
 		m.aiServiceName = "None"
 		m.aiModelName = ""
@@ -370,7 +434,7 @@ func (m *DashboardModel) switchToModel(newModel string) (tea.Model, tea.Cmd) {
 	}
 
 	// Update the model in the AI client
-	m.aiClient.Model = newModel
+	m.aiClient.SetModel(newModel)
 	m.aiModelName = newModel
 
 	// Close the model selection modal
@@ -442,6 +506,40 @@ func (m *DashboardModel) SetVersionChecker(checker *versioncheck.Checker) {
 	m.versionChecker = checker
 }
 
+// SetWebPort sets the web dashboard port for the browser open shortcut
+func (m *DashboardModel) SetWebPort(port int) {
+	m.webPort = port
+}
+
+// SetReleasesFetcher sets the releases fetcher for the what's-new modal
+func (m *DashboardModel) SetReleasesFetcher(f *releases.Fetcher) {
+	m.releasesFetcher = f
+}
+
+// SetCurrentVersion sets the current app version for the what's-new modal
+func (m *DashboardModel) SetCurrentVersion(v string) {
+	m.currentVersion = v
+}
+
+// SetLastSeenVersion sets the last version the user has seen
+func (m *DashboardModel) SetLastSeenVersion(v string) {
+	m.lastSeenVersion = v
+}
+
+// openBrowser opens the given URL in the default browser
+func (m *DashboardModel) openBrowser(url string) {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("open", url)
+	case "windows":
+		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
+	default:
+		cmd = exec.Command("xdg-open", url)
+	}
+	cmd.Start()
+}
+
 // SetK8sSource sets the Kubernetes log source for the dashboard
 func (m *DashboardModel) SetK8sSource(source K8sSourceInterface) {
 	m.k8sSource = source
@@ -462,6 +560,76 @@ func (m *DashboardModel) isK8sMode() bool {
 		}
 	}
 	return false
+}
+
+// toggleColumnsMode switches between normal (Host/Service) and k8s (Namespace/Pod) column modes
+func (m *DashboardModel) toggleColumnsMode() {
+	if m.isK8sMode() {
+		// In k8s mode: swap between k8s columns and host/service columns
+		hasK8sColumns := false
+		hasNormalColumns := false
+
+		for _, col := range m.activeColumns {
+			if col.Key == "k8s.namespace" || col.Key == "k8s.pod" {
+				hasK8sColumns = true
+			}
+			if col.Key == "host.name" || col.Key == "service.name" {
+				hasNormalColumns = true
+			}
+		}
+
+		// Toggle: if showing k8s columns, switch to normal; otherwise switch to k8s
+		newColumns := []ColumnConfig{}
+		if hasK8sColumns && !hasNormalColumns {
+			// Switch to normal mode (Host/Service)
+			for _, col := range m.activeColumns {
+				if col.Key == "k8s.namespace" {
+					// Replace with host.name
+					newColumns = append(newColumns, ColumnConfig{
+						Key: "host.name", Label: "Host", Width: 12, Enabled: true, IsDefault: true,
+					})
+				} else if col.Key == "k8s.pod" {
+					// Replace with service.name
+					newColumns = append(newColumns, ColumnConfig{
+						Key: "service.name", Label: "Service", Width: 16, Enabled: true, IsDefault: true,
+					})
+				} else {
+					newColumns = append(newColumns, col)
+				}
+			}
+		} else {
+			// Switch to k8s mode (Namespace/Pod)
+			for _, col := range m.activeColumns {
+				if col.Key == "host.name" {
+					// Replace with k8s.namespace
+					newColumns = append(newColumns, ColumnConfig{
+						Key: "k8s.namespace", Label: "Namespace", Width: 20, Enabled: true, IsDefault: true,
+					})
+				} else if col.Key == "service.name" {
+					// Replace with k8s.pod
+					newColumns = append(newColumns, ColumnConfig{
+						Key: "k8s.pod", Label: "Pod", Width: 20, Enabled: true, IsDefault: true,
+					})
+				} else {
+					newColumns = append(newColumns, col)
+				}
+			}
+		}
+		m.activeColumns = newColumns
+
+		// Also update availableColumns to reflect the change
+		for i := range m.availableColumns {
+			if m.availableColumns[i].Key == "host.name" || m.availableColumns[i].Key == "service.name" {
+				m.availableColumns[i].Enabled = hasK8sColumns
+			}
+			if m.availableColumns[i].Key == "k8s.namespace" || m.availableColumns[i].Key == "k8s.pod" {
+				m.availableColumns[i].Enabled = !hasK8sColumns
+			}
+		}
+	} else {
+		// Not in k8s mode: just toggle showColumns visibility
+		m.showColumns = !m.showColumns
+	}
 }
 
 // Init initializes the model
@@ -495,4 +663,28 @@ func (m *DashboardModel) getSpinner() string {
 func (m *DashboardModel) getChatSpinner() string {
 	spinners := []string{"⠋", "⠙", "⠹", "⠸"}
 	return spinners[m.chatSpinnerFrame]
+}
+
+// getDefaultActiveColumns returns the default columns that are shown initially
+func getDefaultActiveColumns() []ColumnConfig {
+	return []ColumnConfig{
+		{Key: "timestamp", Label: "Time", Width: 8, Enabled: true, IsDefault: true},
+		{Key: "severity", Label: "Level", Width: 5, Enabled: true, IsDefault: true},
+		{Key: "host.name", Label: "Host", Width: 12, Enabled: true, IsDefault: true},
+		{Key: "service.name", Label: "Service", Width: 16, Enabled: true, IsDefault: true},
+		{Key: "message", Label: "Message", Width: 0, Enabled: true, IsDefault: true}, // Width 0 = fill remaining
+	}
+}
+
+// getDefaultAvailableColumns returns all default columns (including K8s ones that start disabled)
+func getDefaultAvailableColumns() []ColumnConfig {
+	return []ColumnConfig{
+		{Key: "timestamp", Label: "Time", Width: 8, Enabled: true, IsDefault: true},
+		{Key: "severity", Label: "Level", Width: 5, Enabled: true, IsDefault: true},
+		{Key: "host.name", Label: "Host", Width: 12, Enabled: true, IsDefault: true},
+		{Key: "service.name", Label: "Service", Width: 16, Enabled: true, IsDefault: true},
+		{Key: "k8s.namespace", Label: "Namespace", Width: 20, Enabled: false, IsDefault: true},
+		{Key: "k8s.pod", Label: "Pod", Width: 20, Enabled: false, IsDefault: true},
+		{Key: "message", Label: "Message", Width: 0, Enabled: true, IsDefault: true},
+	}
 }

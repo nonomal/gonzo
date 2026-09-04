@@ -31,6 +31,7 @@ type Config struct {
 	LogBuffer            int           `mapstructure:"log-buffer"`
 	TestMode             bool          `mapstructure:"test-mode"`
 	ConfigFile           string        `mapstructure:"config"`
+	AIProvider           string        `mapstructure:"ai-provider"`
 	AIModel              string        `mapstructure:"ai-model"`
 	Files                []string      `mapstructure:"files"`
 	Follow               bool          `mapstructure:"follow"`
@@ -54,6 +55,10 @@ type Config struct {
 	DisableVersionCheck  bool          `mapstructure:"disable-version-check"`
 	ReverseScrollWheel   bool          `mapstructure:"reverse-scroll-wheel"`
 	UseLogTime           bool          `mapstructure:"use-log-time"`
+
+	// Web dashboard (Dstl8 Lite)
+	WebPort     int  `mapstructure:"web-port"`
+	WebDisabled bool `mapstructure:"web-disabled"`
 }
 
 var (
@@ -160,6 +165,7 @@ func init() {
 	rootCmd.Flags().IntP("log-buffer", "b", 1000, "Maximum log buffer size")
 	rootCmd.Flags().BoolP("test-mode", "t", false, "Run in test mode (works without TTY)")
 	rootCmd.Flags().BoolP("version", "v", false, "Print version information")
+	rootCmd.Flags().String("ai-provider", "", "AI provider to use: 'openai' (default, requires OPENAI_API_KEY), 'claude-code' (requires claude CLI)")
 	rootCmd.Flags().String("ai-model", "", "AI model to use for log analysis (auto-selects best available if not specified)")
 	rootCmd.Flags().StringSliceP("file", "f", []string{}, "Files or file globs to read logs from (can specify multiple)")
 	rootCmd.Flags().Bool("follow", false, "Follow log files like 'tail -f' (watch for new lines in real-time)")
@@ -184,11 +190,16 @@ func init() {
 	rootCmd.Flags().Bool("reverse-scroll-wheel", false, "Reverse scroll wheel direction (natural scrolling)")
 	rootCmd.Flags().Bool("use-log-time", false, "Use original log timestamps instead of receive time for heatmap and display (falls back to receive time if log has no timestamp)")
 
+	// Dstl8 Lite web dashboard flags
+	rootCmd.Flags().Int("web-port", 5718, "Port for the Dstl8 Lite web dashboard")
+	rootCmd.Flags().Bool("web-disabled", false, "Disable the web dashboard")
+
 	// Bind flags to viper
 	viper.BindPFlag("memory-size", rootCmd.Flags().Lookup("memory-size"))
 	viper.BindPFlag("update-interval", rootCmd.Flags().Lookup("update-interval"))
 	viper.BindPFlag("log-buffer", rootCmd.Flags().Lookup("log-buffer"))
 	viper.BindPFlag("test-mode", rootCmd.Flags().Lookup("test-mode"))
+	viper.BindPFlag("ai-provider", rootCmd.Flags().Lookup("ai-provider"))
 	viper.BindPFlag("ai-model", rootCmd.Flags().Lookup("ai-model"))
 	viper.BindPFlag("files", rootCmd.Flags().Lookup("file"))
 	viper.BindPFlag("follow", rootCmd.Flags().Lookup("follow"))
@@ -212,7 +223,8 @@ func init() {
 	viper.BindPFlag("disable-version-check", rootCmd.Flags().Lookup("disable-version-check"))
 	viper.BindPFlag("reverse-scroll-wheel", rootCmd.Flags().Lookup("reverse-scroll-wheel"))
 	viper.BindPFlag("use-log-time", rootCmd.Flags().Lookup("use-log-time"))
-
+	viper.BindPFlag("web-port", rootCmd.Flags().Lookup("web-port"))
+	viper.BindPFlag("web-disabled", rootCmd.Flags().Lookup("web-disabled"))
 	// Add version command
 	rootCmd.AddCommand(versionCmd)
 }

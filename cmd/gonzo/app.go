@@ -7,19 +7,28 @@ import (
 	"io"
 	"log"
 	"os"
+	"runtime"
 	"strings"
+	"sync"
 	"time"
 
+	"io/fs"
+
 	"github.com/control-theory/gonzo/internal/analyzer"
+	"github.com/control-theory/gonzo/internal/engine"
 	"github.com/control-theory/gonzo/internal/filereader"
 	"github.com/control-theory/gonzo/internal/formats"
 	"github.com/control-theory/gonzo/internal/k8s"
 	"github.com/control-theory/gonzo/internal/memory"
 	"github.com/control-theory/gonzo/internal/otlplog"
 	"github.com/control-theory/gonzo/internal/otlpreceiver"
+	"github.com/control-theory/gonzo/internal/releases"
+	"github.com/control-theory/gonzo/internal/state"
 	"github.com/control-theory/gonzo/internal/tui"
 	versioncheck "github.com/control-theory/gonzo/internal/version"
 	"github.com/control-theory/gonzo/internal/vmlogs"
+	gonzoweb "github.com/control-theory/gonzo/internal/web"
+	webembed "github.com/control-theory/gonzo/web"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
@@ -102,10 +111,27 @@ func runApp(cmd *cobra.Command, args []string) error {
 	freqMemory := memory.NewFrequencyMemory(cfg.MemorySize)
 
 	// Initialize TUI model with components
-	dashboard := tui.NewDashboardModel(cfg.LogBuffer, cfg.UpdateInterval, cfg.AIModel, textAnalyzer.GetStopWords(), cfg.ReverseScrollWheel, cfg.UseLogTime)
+	dashboard := tui.NewDashboardModel(cfg.LogBuffer, cfg.UpdateInterval, cfg.AIProvider, cfg.AIModel, textAnalyzer.GetStopWords(), cfg.ReverseScrollWheel, cfg.UseLogTime)
 	if versionChecker != nil {
 		dashboard.SetVersionChecker(versionChecker)
 	}
+	if !cfg.WebDisabled {
+		dashboard.SetWebPort(cfg.WebPort)
+	}
+
+	// What's New: fetch GitHub releases in background and wire up auto-show
+	currentVersion, _ := GetVersionInfo()
+	relFetcher := releases.NewFetcher()
+	if currentVersion != "dev" && currentVersion != "" && !cfg.DisableVersionCheck {
+		relFetcher.FetchInBackground()
+	}
+	appState := state.Load()
+	dashboard.SetReleasesFetcher(relFetcher)
+	dashboard.SetCurrentVersion(currentVersion)
+	dashboard.SetLastSeenVersion(appState.LastSeenVersion)
+
+	// Create shared analysis engine (used by web dashboard)
+	eng := engine.NewEngine(cfg.LogBuffer, textAnalyzer.GetStopWords(), nil, cfg.UseLogTime)
 
 	tuiModel := &simpleTuiModel{
 		formatDetector: formatDetector,
@@ -115,6 +141,7 @@ func runApp(cmd *cobra.Command, args []string) error {
 		otlpAnalyzer:   otlpAnalyzer,
 		freqMemory:     freqMemory,
 		dashboard:      dashboard,
+		engine:         eng,
 		updateInterval: cfg.UpdateInterval,
 		testMode:       cfg.TestMode,
 		versionChecker: versionChecker,
@@ -135,6 +162,19 @@ func runApp(cmd *cobra.Command, args []string) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	tuiModel.ctx = ctx
 	tuiModel.cancelFunc = cancel
+
+	// Start web dashboard in background (if not disabled)
+	if !cfg.WebDisabled {
+		// Get embedded web dashboard assets
+		var staticFS fs.FS
+		if distFS, err := fs.Sub(webembed.DistFS, "dist"); err == nil {
+			staticFS = distFS
+		}
+		webSrv := gonzoweb.NewServer(eng, staticFS, currentVersion, relFetcher)
+		if err := webSrv.Start(ctx, cfg.WebPort); err != nil {
+			log.Printf("Warning: web dashboard failed to start: %v", err)
+		}
+	}
 
 	if _, err := p.Run(); err != nil {
 		if strings.Contains(err.Error(), "TTY") || strings.Contains(err.Error(), "/dev/tty") {
@@ -166,11 +206,19 @@ type simpleTuiModel struct {
 	otlpAnalyzer   *analyzer.OTLPAnalyzer
 	freqMemory     *memory.FrequencyMemory
 	dashboard      *tui.DashboardModel
+	engine         *engine.Engine // Shared analysis state for web dashboard
 	updateInterval time.Duration
 	testMode       bool
 	ctx            context.Context
 	cancelFunc     context.CancelFunc
 	versionChecker *versioncheck.Checker
+
+	// stdin is the source for stdin-mode reading. It defaults to os.Stdin but is
+	// an interface so the quit-teardown path can be unit-tested. On quit we close
+	// it to unblock a goroutine parked in a blocking read(2) on a live pipe
+	// (e.g. `kubectl logs -f ... | gonzo`); see handleQuitKey and issue #58.
+	stdin         io.ReadCloser
+	stopStdinOnce sync.Once
 
 	// Internal state
 	finished       bool
@@ -313,10 +361,16 @@ func (m *simpleTuiModel) Init() tea.Cmd {
 			// stdin is a pipe or file, we have data
 			m.hasStdinData = true
 			m.inputChan = make(chan string, 100)
+			m.stdin = os.Stdin
 
 			// Start goroutine to read stdin without blocking
 			go m.readStdinAsync()
 		}
+	}
+
+	// Auto-detect log source if nothing was explicitly configured
+	if !m.hasK8sInput && !m.hasVmlogsInput && !m.hasOTLPInput && !m.hasFileInput && !m.hasStdinData && !hasExplicitSourceFlag() {
+		m.autoDetectLogSource()
 	}
 
 	// Start the dashboard
@@ -466,11 +520,45 @@ func (m *simpleTuiModel) readFilesAsync() {
 	}
 }
 
+// handleQuitKey cancels the app context and stops the input reader when the
+// user presses a quit key ("q" or Ctrl-C). This is the lifecycle teardown seam
+// for issue #58: on quit, bubbletea restores the terminal via tea.Quit, but the
+// stdin-reading goroutine can stay parked in a blocking read(2) on a live pipe
+// (e.g. `kubectl logs -f ... | gonzo`) whose writer never sends EOF. Without
+// closing stdin, that read holds the terminal and control is not returned to the
+// parent (K9s) until a follow-up Ctrl-C. It returns true if msg was a quit key.
+func (m *simpleTuiModel) handleQuitKey(msg tea.KeyMsg) bool {
+	if s := msg.String(); s != "q" && s != "ctrl+c" {
+		return false
+	}
+	if m.cancelFunc != nil {
+		m.cancelFunc()
+	}
+	m.stopInput()
+	return true
+}
+
+// stopInput unblocks the stdin reader by closing the stdin source exactly once.
+// Closing the read end makes a blocked Scan/read(2) return immediately so the
+// reader goroutine can exit and the terminal is released to the parent process.
+func (m *simpleTuiModel) stopInput() {
+	m.stopStdinOnce.Do(func() {
+		if m.stdin != nil {
+			_ = m.stdin.Close()
+		}
+	})
+}
+
 // readStdinAsync reads from stdin in a goroutine without blocking
 func (m *simpleTuiModel) readStdinAsync() {
 	defer close(m.inputChan)
 
-	scanner := bufio.NewScanner(os.Stdin)
+	// Default to os.Stdin; tests inject a different reader via m.stdin.
+	if m.stdin == nil {
+		m.stdin = os.Stdin
+	}
+
+	scanner := bufio.NewScanner(m.stdin)
 
 	// Set larger buffer size (1MB) to handle long OTLP JSON lines
 	const maxScanTokenSize = 1024 * 1024 // 1MB
@@ -489,11 +577,15 @@ func (m *simpleTuiModel) readStdinAsync() {
 		// Wait for either scan result or context cancellation
 		select {
 		case <-m.ctx.Done():
+			// On quit, stopInput closes stdin, which unblocks the in-flight
+			// scanner.Scan above so its goroutine can exit instead of leaking.
+			m.stopInput()
 			return
 		case hasLine := <-scanChan:
 			if !hasLine {
-				// EOF or error - exit gracefully
-				break
+				// EOF or error - exit gracefully (return, not break, so we do
+				// not re-spawn Scan and busy-spin on a closed input).
+				return
 			}
 
 			line := scanner.Text()
@@ -501,6 +593,7 @@ func (m *simpleTuiModel) readStdinAsync() {
 				select {
 				case m.inputChan <- line:
 				case <-m.ctx.Done():
+					m.stopInput()
 					return
 				}
 			}
@@ -536,12 +629,10 @@ func (m *simpleTuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
-		// Check for quit keys and cancel context
-		if msg.String() == "q" || msg.String() == "ctrl+c" {
-			if m.cancelFunc != nil {
-				m.cancelFunc()
-			}
-		}
+		// On a quit key, cancel the app context and stop the stdin reader so
+		// control returns to the parent process (e.g. K9s) without requiring a
+		// follow-up Ctrl-C. See handleQuitKey and issue #58.
+		m.handleQuitKey(msg)
 		// Always forward to dashboard first - let it decide whether to quit
 		newDashboard, cmd := m.dashboard.Update(msg)
 		m.dashboard = newDashboard.(*tui.DashboardModel)
@@ -626,6 +717,11 @@ func (m *simpleTuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Send periodic snapshot with current count (even if 0)
 		snapshot := m.freqMemory.GetSnapshot()
 
+		// Feed snapshot to the shared engine
+		if m.engine != nil {
+			m.engine.UpdateFrequencySnapshot(snapshot)
+		}
+
 		// No automatic reset - only manual reset via 'r' key now
 		shouldReset := false
 
@@ -635,6 +731,11 @@ func (m *simpleTuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			LineCount:        m.logCount,  // Keep for backward compatibility
 			ForceCountUpdate: true,        // Always update count history, even with 0
 			ResetDrain3:      shouldReset, // Reset drain3 when frequency memory resets
+		}
+
+		// Feed interval counts to the shared engine
+		if m.engine != nil && m.severityCounts != nil {
+			m.engine.IngestSeverityCounts(*m.severityCounts)
 		}
 
 		// Reset severity counts for next interval
@@ -691,4 +792,89 @@ func (m *simpleTuiModel) periodicUpdate() tea.Cmd {
 			sequence: sequence,
 		}
 	})
+}
+
+// hasExplicitSourceFlag returns true if the user explicitly provided any log source flag.
+func hasExplicitSourceFlag() bool {
+	return cfg.K8sEnabled ||
+		len(cfg.Files) > 0 ||
+		cfg.OTLPEnabled ||
+		cfg.VmlogsURL != ""
+}
+
+// autoDetectLogSource tries to automatically find a log source:
+// 1. If a kubeconfig exists, enable Kubernetes log streaming (all namespaces)
+// 2. Otherwise, fall back to OS system logs
+func (m *simpleTuiModel) autoDetectLogSource() {
+	// Try kubeconfig first
+	if kubeconfigs := k8s.DetectKubeconfig(); len(kubeconfigs) > 0 {
+		// Kubeconfig found — auto-enable Kubernetes with all namespaces
+		log.Printf("Auto-detected kubeconfig(s): %s; enabling Kubernetes log streaming", strings.Join(kubeconfigs, ", "))
+		m.inputChan = make(chan string, 100)
+
+		// Kubeconfig left empty so client-go resolves KUBECONFIG itself
+		k8sConfig := &k8s.Config{
+			Context:    cfg.K8sContext,
+			Namespaces: cfg.K8sNamespaces,
+			Selector:   cfg.K8sSelector,
+			Since:      cfg.K8sSince,
+			TailLines:  cfg.K8sTailLines,
+		}
+
+		k8sSource, err := k8s.NewKubernetesLogSource(k8sConfig)
+		if err == nil {
+			if err := k8sSource.Start(); err == nil {
+				m.hasK8sInput = true
+				m.k8sReceiver = k8sSource
+				m.dashboard.SetK8sSource(k8sSource)
+				go m.readK8sAsync()
+				return
+			}
+			log.Printf("Auto-detect: Kubernetes start failed: %v", err)
+		} else {
+			log.Printf("Auto-detect: Kubernetes init failed: %v", err)
+		}
+	}
+
+	// No kubeconfig — fall back to OS system logs
+	logPath := systemLogPath()
+	if logPath == "" {
+		log.Printf("Auto-detect: no kubeconfig and no known system log path for %s", runtime.GOOS)
+		return
+	}
+
+	if _, err := os.Stat(logPath); err != nil {
+		log.Printf("Auto-detect: system log %s not accessible: %v", logPath, err)
+		return
+	}
+
+	log.Printf("Auto-detected system log at %s", logPath)
+	m.inputChan = make(chan string, 100)
+
+	var err error
+	m.fileReader, err = filereader.New([]string{logPath}, true) // follow mode
+	if err != nil {
+		log.Printf("Auto-detect: failed to read %s: %v", logPath, err)
+		return
+	}
+	m.hasFileInput = true
+	go m.readFilesAsync()
+}
+
+// systemLogPath returns the default system log file path for the current OS.
+func systemLogPath() string {
+	switch runtime.GOOS {
+	case "darwin":
+		return "/var/log/system.log"
+	case "linux":
+		// Try syslog first, then messages
+		for _, p := range []string{"/var/log/syslog", "/var/log/messages"} {
+			if _, err := os.Stat(p); err == nil {
+				return p
+			}
+		}
+		return ""
+	default:
+		return ""
+	}
 }
